@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+#  This is a sample go program that is created to generate log every 30 seconds  
+  go-app:
+    container_name: go-app
+    build:
+      dockerfile: dockerfile-go
+    labels:
+      logging: "promtail"
+    networks:
+      - app
+
+  # we will use postgres as datasource.
+  postgres:
+    container_name: postgres
+    image: postgres:13-alpine
+    environment:
+      POSTGRES_USER: postgres     # define credentials
+      POSTGRES_PASSWORD: postgres # define credentials
+      POSTGRES_DB: grafana       # define database
+    ports:
+      - 5432:5432                 # Postgres port
+    volumes:
+      - ./postgresql/data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-q", "-d", "postgres", "-U", "postgres" ]
+      start_period: 5s
+      timeout: 1s
+      interval: 10s
+      retries: 10
+
+    networks:
+      - app
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:9.3.6
+    ports:
+      - 3000:3000
+    environment:
+    # disabling auth by default
+      GF_AUTH_ANONYMOUS_ENABLED: true
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: true
+    # instead of sqllite3 using postgress db for storing grafana data
+      GF_DATABASE_TYPE: postgres
+      GF_DATABASE_HOST: postgres:5432
+      GF_DATABASE_NAME: grafana
+      GF_DATABASE_USER: postgres
+      GF_DATABASE_PASSWORD: postgres
+      GF_DATABASE_SSL_MODE: disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    links:
+      - postgres:postgres
+    networks:
+      - app
+
+  loki:
+    container_name: loki
+    image: grafana/loki
+    ports:
+      - 3100:3100
+    command: -config.file=/etc/loki/config.yaml
+    depends_on:
+      - grafana
+    volumes:
+      - ./loki/loki-config-filestorage.yaml:/etc/loki/config.yaml
+    networks:
+      - app
+
+  promtail:
+    image:  grafana/promtail:2.7.4
+    container_name: promtail
+    volumes:
+      - ./promtail/promtail.yaml:/etc/promtail/docker-config.yaml
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: -config.file=/etc/promtail/docker-config.yaml
+    depends_on:
+      - loki
+    networks:
+      - app
+
+networks:
+  app:
+    name: app
